@@ -15,6 +15,7 @@ import yaml
 from lib.export_cache import ExportCache
 from lib.utils  import zephir_config
 from lib.vufind_formatter import VufindFormatter
+import lib.export_selection as es
 
 print(datetime.datetime.time(datetime.datetime.now()))
 
@@ -43,16 +44,12 @@ def main():
     htmm_engine = create_engine(HTMM_DB_CONNECT_STR)
     # live_statement = "select cid, db_updated_at, zr.id as htid, var_usfeddoc, var_score, metadata_json from zephir_records as zr inner join zephir_filedata as zf on zr.id = zf.id and attr_ingest_date is not null and cid = \"{}\" order by var_usfeddoc, var_score"
     #feddoc_statement = "select cid, db_updated_at, zr.id as htid, var_usfeddoc, var_score, metadata_json from zephir_records as zr inner join zephir_filedata as zf on zr.id = zf.id and attr_ingest_date is not null order by cid, var_usfeddoc, var_score limit 30"
-    orig_stmt = "select cid, db_updated_at, zr.id as htid, var_score, concat(cid,'_',zr.autoid) as vufind_sort, metadata_json from zephir_records as zr inner join zephir_filedata as zf on zr.id = zf.id where attr_ingest_date is not null order by cid, var_score DESC, vufind_sort ASC"
+    #orig_stmt = "select cid, db_updated_at, zr.id as htid, var_score, concat(cid,'_',zr.autoid) as vufind_sort, metadata_json from zephir_records as zr inner join zephir_filedata as zf on zr.id = zf.id where attr_ingest_date is not null order by cid, var_score DESC, vufind_sort ASC"
     start_time = datetime.datetime.time(datetime.datetime.now())
-    live_index = {}
-    max_date = None
-    record_count = 0
-    records = []
-    htid = None
-    current_cid = None
 
     cache = ExportCache(os.path.abspath("cache"),'complete-gz')
+
+    select_class = getattr(es, 'VufindOriginal')
 
     try:
         bulk_session = cache.session()
@@ -62,83 +59,63 @@ def main():
             host=htmm_db.get("host", None),
             database=htmm_db.get("database", None))
 
-        cursor = conn.cursor()
-        cursor.execute(orig_stmt)
+        cursor = conn.cursor(named_tuple=True)
+        cursor.execute(select_class.sql_query())
 
-        curr_cid = None
-        htid = None
-        records = None
-        entries = []
-        max_date = None
-        reverse_order = False
+        current_record =  None
+        current_group = []
+        bulk_entries = []
+
         for idx, row in enumerate(cursor):
-            cid, db_date, htid, var_score, vufind_sort, record = row
-            if cid != curr_cid or curr_cid is None:
-                # write last cluster
-                if curr_cid:
-                    cache_id = curr_cid
-                    if reverse_order:
-                        records.reverse()
-                    cache_data = json.dumps(VufindFormatter.create_record(curr_cid, records).as_dict(),separators=(',',':'))
-                    cache_key = (zlib.crc32("{}{}".format(len(records), max_date).encode('utf8')))
-                    cache_date = max_date
-                    entry = cache.entry(cache_id, cache_key, cache_data, cache_date)
-                    entries.append(entry)
-                    if idx % 5000 == 0:
-                        bulk_session.bulk_save_objects(entries)
-                        entries = []
-                    print("{}: {}".format(cache_id, cache_key))
-                # prepare next cluster
-                curr_cid = cid
-                records = [record]
-                max_date = db_date
-                reverse_order = var_score is None
-            else:
-                if db_date > max_date:
-                    max_date = db_date
-                records.append(record)
+            new_record = select_class(row)
+            if current_group and new_record.group_id != current_group[0].group_id:
+                # prepare cache of last group
+                cache_params = select_class.create_cache_params(VufindFormatter,current_group)
+                entry = cache.create_entry(**cache_params)
+                bulk_entries.append(entry)
 
-        cache_id = curr_cid
-        cache_data = json.dumps(VufindFormatter.create_record(curr_cid, records).as_dict(),separators=(',',':'))
-        cache_key = (zlib.crc32("{}{}".format(len(records), max_date).encode('utf8')))
-        cache_date = max_date
-        entry = cache.entry(cache_id, cache_key, cache_data, cache_date)
-        entries.append(entry)
-        bulk_session.bulk_save_objects(entries)
+
+                # save to cache database (in bulk)
+                if idx % 5000 == 0:
+                    bulk_session.bulk_save_objects(bulk_entries)
+                    bulk_entries = []
+
+                # reset for next group
+                current_group = []
+
+            # add item
+            current_group.append(new_record)
+
+        # add record information to current grouping
+            #if last_cache_entry and bulk_entries and bulk_entries[-1].cache_id != last_cache_entry.cache_id:
+        cache_params = select_class.create_cache_params(VufindFormatter,current_group)
+
+        entry = cache.create_entry(**cache_params)
+        if bulk_entries and bulk_entries[-1].cache_id != entry.cache_id:
+            bulk_entries.append(entry)
+
+        if bulk_entries:
+            bulk_session.bulk_save_objects(bulk_entries)
+
         bulk_session.commit()
         bulk_session.close()
+
         print("start:{}".format(start_time))
         print(datetime.datetime.time(datetime.datetime.now()))
     finally:
         cursor.close()
         conn.close()
 
-        # cache_key = (zlib.crc32("{}{}".format(record_count, max_date).encode()))
-        # record = VufindFormatter.create_record("000000001", htid, records)
-        # json.dumps(record.as_dict(), separators=(',',':'))
+def prepare_cache_entry(cache, current):
+        prioritized = VufindSelect.prioritize(current['records'])
+        formatted_record = VufindFormatter.create_record(prioritized)
 
-###############################################
-    # with htmm_engine.connect() as con1:
-    #     cids_result = con1.execute("select distinct(cid) as cid from zephir_records where attr_ingest_date is not null limit 100")
-    #     print(datetime.datetime.time(datetime.datetime.now()))
-    #     for cid in cids_result:
-    #         with htmm_engine.connect() as con2:
-    #             result = con2.execute(live_statement.format(cid.cid))
-    #             for idx, row in enumerate(result):
-    #                 if htid is None:
-    #                     htid = row.htid
-    #                 if max_date is None or row.db_updated_at > max_date:
-    #                     max_date = row.db_updated_at
-    #                 record_count = idx + 1
-    #                 records.append(row.metadata_json)
-    #
-    #
-    #         cache_key = (zlib.crc32("{}{}".format(record_count, max_date).encode()))
-    #         # print(records)
-    #         record = VufindFormatter.create_record("000000001", htid, records)
-    #         json.dumps(record.as_dict(), separators=(',',':'))
-    # print(datetime.datetime.time(datetime.datetime.now()))
+        cache_id = current['group_id']
+        cache_data = json.dumps(formatted_record.as_dict(),separators=(',',':'))
+        cache_date = max(current['dates'])
+        cache_key = VufindSelect.generate_key(len(current['records']), cache_date)
 
-#####################################################################
+        entry = cache.create_entry(cache_id, cache_key, cache_data, cache_date)
+
 if __name__ == "__main__":
     main()

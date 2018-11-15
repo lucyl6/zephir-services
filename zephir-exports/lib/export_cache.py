@@ -96,7 +96,7 @@ class ExportCache:
         with self.session_context() as session:
             session.add(new_cache)
 
-    def entry(self, cache_id, cache_key, cache_data, cache_date):
+    def create_entry(self, cache_id, cache_key, cache_data, cache_date):
         d_key = zlib.crc32(cache_data.encode('utf8'))
         compressed_cache_data = zlib.compress(cache_data.encode('utf8'))
         new_cache = self.Cache(

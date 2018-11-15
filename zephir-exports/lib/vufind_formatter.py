@@ -4,7 +4,7 @@ import pymarc
 
 class VufindFormatter:
     @staticmethod
-    def create_record(cid, records):
+    def create_record(control_num, records):
         base_sdr = None
         base_record = None
         holdings = []
@@ -19,7 +19,7 @@ class VufindFormatter:
                 marc_record['974'].subfields.insert(0, "b")
                 if base_record is None:
                     base_record = marc_record
-                    base_record["001"].data = cid
+                    base_record["001"].data = control_num
                     for field in marc_record.get_fields("035"):
                         if field.value().startswith('sdr-'):
                             incl_sdrs.add(field.value())
