@@ -23,7 +23,7 @@ class VufindOriginal:
         for row in data:
             records.append(row.record)
             dates.append(row.date)
-            if row.score:
+            if row.score is None:
                 no_scores = False
         if no_scores:
             records.reverse()
