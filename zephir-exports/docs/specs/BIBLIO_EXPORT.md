@@ -1,6 +1,6 @@
-Author | Major Update
---- | --- | ---
-Charlie Collett | 2018/011/15
+| Author | Major Update |
+| --- | --- | --- |
+| Charlie Collett | 2018/011/15 |
 
 # Bibliographic Export
 
